@@ -11,15 +11,13 @@ import (
 )
 
 type OutputBuffer struct {
-	buf   *bytes.Buffer
-	lines []string
+	buf *bytes.Buffer
 	*sync.Mutex
 }
 
 func NewOutputBuffer() *OutputBuffer {
 	out := &OutputBuffer{
 		buf:   &bytes.Buffer{},
-		lines: []string{},
 		Mutex: &sync.Mutex{},
 	}
 	return out
@@ -32,21 +30,22 @@ func (rw *OutputBuffer) Write(p []byte) (n int, err error) {
 	return
 }
 
-func (rw *OutputBuffer) Lines() []string {
+func (rw *OutputBuffer) Latest() string {
 	rw.Lock()
 	s := bufio.NewScanner(rw.buf)
+	var line string
 	for s.Scan() {
-		rw.lines = append(rw.lines, s.Text())
+		line = s.Text()
 	}
 	rw.Unlock()
-	return rw.lines
+	return line
 }
 
 type Status struct {
-	PID      int
-	Complete bool
-	Stdout   []string
-	Stderr   []string
+	PID       int
+	Complete  bool
+	LatestOut string
+	LatestErr string
 }
 
 type Cmd struct {
@@ -130,21 +129,21 @@ func (c *Cmd) Status() Status {
 	if c.done {
 		if !c.final {
 			if c.stdoutBuf != nil {
-				c.status.Stdout = c.stdoutBuf.Lines()
+				c.status.LatestOut = c.stdoutBuf.Latest()
 				c.stdoutBuf = nil
 			}
 			if c.stderrBuf != nil {
-				c.status.Stderr = c.stderrBuf.Lines()
+				c.status.LatestErr = c.stderrBuf.Latest()
 				c.stderrBuf = nil
 			}
 			c.final = true
 		}
 	} else {
 		if c.stdoutBuf != nil {
-			c.status.Stdout = c.stdoutBuf.Lines()
+			c.status.LatestOut = c.stdoutBuf.Latest()
 		}
 		if c.stderrBuf != nil {
-			c.status.Stderr = c.stderrBuf.Lines()
+			c.status.LatestErr = c.stderrBuf.Latest()
 		}
 	}
 	return c.status
