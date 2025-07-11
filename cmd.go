@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -49,9 +50,11 @@ type Status struct {
 }
 
 type Cmd struct {
-	cmd *exec.Cmd
-	env []string
-	dir string
+	name string
+	args []string
+	ctx  context.Context
+	env  []string
+	dir  string
 	*sync.Mutex
 	started    bool
 	stopped    bool
@@ -65,26 +68,26 @@ type Cmd struct {
 }
 
 func NewCmd(name string, args ...string) *Cmd {
-	cmd := exec.Command(name, args...)
 	return &Cmd{
-		cmd:        cmd,
-		Mutex:      &sync.Mutex{},
-		statusChan: make(chan Status, 1),
-		doneChan:   make(chan struct{}),
-		stdoutBuf:  NewOutputBuffer(),
-		stderrBuf:  NewOutputBuffer(),
+		name:      name,
+		args:      args,
+		ctx:       nil,
+		Mutex:     &sync.Mutex{},
+		doneChan:  make(chan struct{}),
+		stdoutBuf: NewOutputBuffer(),
+		stderrBuf: NewOutputBuffer(),
 	}
 }
 
 func NewCmdWithCtx(ctx context.Context, name string, args ...string) *Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
 	return &Cmd{
-		cmd:        cmd,
-		Mutex:      &sync.Mutex{},
-		statusChan: make(chan Status, 1),
-		doneChan:   make(chan struct{}),
-		stdoutBuf:  NewOutputBuffer(),
-		stderrBuf:  NewOutputBuffer(),
+		name:      name,
+		args:      args,
+		ctx:       ctx,
+		Mutex:     &sync.Mutex{},
+		doneChan:  make(chan struct{}),
+		stdoutBuf: NewOutputBuffer(),
+		stderrBuf: NewOutputBuffer(),
 	}
 }
 
@@ -99,6 +102,10 @@ func (c *Cmd) SetEnv(env []string) {
 func (c *Cmd) Start() <-chan Status {
 	c.Lock()
 	defer c.Unlock()
+	if c.statusChan != nil {
+		return c.statusChan
+	}
+	c.statusChan = make(chan Status, 1)
 	go c.run()
 	return c.statusChan
 }
@@ -151,46 +158,54 @@ func (c *Cmd) Status() Status {
 
 func (c *Cmd) run() {
 	defer func() {
-		c.statusChan <- c.Status() // unblocks Start if caller is waiting
+		c.statusChan <- c.Status()
 		close(c.doneChan)
 	}()
-	setProcessGroupID(c.cmd)
+
+	var cmd *exec.Cmd
+	if c.ctx != nil {
+		cmd = exec.CommandContext(c.ctx, c.name, c.args...)
+	} else {
+		cmd = exec.Command(c.name, c.args...)
+	}
+	setProcessGroupID(cmd)
 	switch {
 	case c.stdoutBuf != nil && c.stderrBuf != nil:
-		c.cmd.Stdout = c.stdoutBuf
-		c.cmd.Stderr = c.stderrBuf
+		cmd.Stdout = c.stdoutBuf
+		cmd.Stderr = c.stderrBuf
 	case c.stdoutBuf != nil && c.stderrBuf == nil:
-		c.cmd.Stdout = c.stdoutBuf
-		c.cmd.Stderr = c.stdoutBuf
+		cmd.Stdout = c.stdoutBuf
+		cmd.Stderr = c.stdoutBuf
 	default:
-		c.cmd.Stdout = nil
-		c.cmd.Stderr = nil
+		cmd.Stdout = nil
+		cmd.Stderr = nil
 	}
 	if len(c.env) > 0 {
-		c.cmd.Env = c.env
+		cmd.Env = c.env
 	}
 	if c.dir != "" {
-		c.cmd.Dir = c.dir
+		cmd.Dir = c.dir
 	}
-	if err := c.cmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		c.Lock()
 		c.done = true
 		c.Unlock()
 		return
 	}
 	c.Lock()
-	c.status.PID = c.cmd.Process.Pid
+	c.status.PID = cmd.Process.Pid
 	c.started = true
 	c.Unlock()
-	err := c.cmd.Wait()
+	err := cmd.Wait()
 	signaled := false
 	if err != nil && fmt.Sprintf("%T", err) == "*exec.ExitError" {
-		exiterr := err.(*exec.ExitError)
+		var exiterr *exec.ExitError
+		errors.As(err, &exiterr)
 		err = nil
 		if waitStatus, ok := exiterr.Sys().(syscall.WaitStatus); ok {
 			if waitStatus.Signaled() {
 				signaled = true
-				err = fmt.Errorf(exiterr.Error())
+				err = exiterr
 			}
 		}
 	}
