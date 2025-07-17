@@ -1,8 +1,6 @@
 package gcmd
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,13 +10,13 @@ import (
 )
 
 type OutputBuffer struct {
-	buf *bytes.Buffer
+	buf []byte
 	*sync.Mutex
 }
 
 func NewOutputBuffer() *OutputBuffer {
 	out := &OutputBuffer{
-		buf:   &bytes.Buffer{},
+		buf:   []byte{},
 		Mutex: &sync.Mutex{},
 	}
 	return out
@@ -26,20 +24,15 @@ func NewOutputBuffer() *OutputBuffer {
 
 func (rw *OutputBuffer) Write(p []byte) (n int, err error) {
 	rw.Lock()
-	n, err = rw.buf.Write(p)
+	rw.buf = p
 	rw.Unlock()
-	return
+	return len(p), nil
 }
 
 func (rw *OutputBuffer) Latest() string {
 	rw.Lock()
-	s := bufio.NewScanner(rw.buf)
-	var line string
-	for s.Scan() {
-		line = s.Text()
-	}
-	rw.Unlock()
-	return line
+	defer rw.Unlock()
+	return string(rw.buf)
 }
 
 type Status struct {
@@ -199,13 +192,13 @@ func (c *Cmd) run() {
 	err := cmd.Wait()
 	signaled := false
 	if err != nil && fmt.Sprintf("%T", err) == "*exec.ExitError" {
-		var exiterr *exec.ExitError
-		errors.As(err, &exiterr)
+		var exitErr *exec.ExitError
+		errors.As(err, &exitErr)
 		err = nil
-		if waitStatus, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+		if waitStatus, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 			if waitStatus.Signaled() {
 				signaled = true
-				err = exiterr
+				err = exitErr
 			}
 		}
 	}

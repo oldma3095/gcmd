@@ -17,7 +17,7 @@ func TestRunning(t *testing.T) {
 			return
 		case <-ticker.C:
 			status := cmd.Status()
-			t.Log(time.Now(), status.PID, status.Complete, status.LatestOut, status.LatestErr)
+			t.Logf("PID: %d, Complete: %t, LatestOut: %s, LatestErr: %s", status.PID, status.Complete, status.LatestOut, status.LatestErr)
 		}
 	}
 }
